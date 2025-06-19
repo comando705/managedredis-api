@@ -1,0 +1,9 @@
+redis:
+  health-check:
+    initial-delay: 30  # 초기 지연 시간 (초)
+    period: 30         # 체크 주기 (초)
+    thread-pool-size: 1  # 상태 체크 스레드 풀 크기
+
+spring:
+  application:
+    name: managedredis-api 

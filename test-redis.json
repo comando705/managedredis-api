@@ -1,0 +1,21 @@
+{
+  "apiVersion": "redis.managed.com/v1",
+  "kind": "ManagedRedis",
+  "metadata": {
+    "name": "api-test-redis"
+  },
+  "spec": {
+    "version": "7.0.0",
+    "replicas": 3,
+    "resources": {
+      "requests": {
+        "memory": "128Mi",
+        "cpu": "100m"
+      },
+      "limits": {
+        "memory": "256Mi",
+        "cpu": "200m"
+      }
+    }
+  }
+} 
