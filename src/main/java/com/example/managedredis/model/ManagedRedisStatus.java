@@ -11,11 +11,10 @@ public class ManagedRedisStatus {
     private String phase;
     private String primaryEndpoint;
     private String readerEndpoint;
-    private List<Condition> conditions = new ArrayList<>();
-    private List<RedisNode> nodes = new ArrayList<>();
+    private List<Node> nodes;
 
     @Data
-    public static class RedisNode {
+    public static class Node {
         private String name;
         private String role;
         private String status;

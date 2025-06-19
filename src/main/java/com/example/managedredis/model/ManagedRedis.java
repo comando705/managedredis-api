@@ -5,8 +5,8 @@ import io.fabric8.kubernetes.client.CustomResource;
 import io.fabric8.kubernetes.model.annotation.Group;
 import io.fabric8.kubernetes.model.annotation.Version;
 
-@Version("v1alpha1")
-@Group("redis.example.com")
+@Group("redis.managed.com")
+@Version("v1")
 public class ManagedRedis extends CustomResource<ManagedRedisSpec, ManagedRedisStatus> implements Namespaced {
     @Override
     protected ManagedRedisSpec initSpec() {

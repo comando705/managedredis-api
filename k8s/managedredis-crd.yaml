@@ -1,9 +1,9 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: managedredis.redis.example.com
+  name: managedredis.redis.managed.com
 spec:
-  group: redis.example.com
+  group: redis.managed.com
   names:
     kind: ManagedRedis
     listKind: ManagedRedisList
@@ -13,7 +13,7 @@ spec:
       - mredis
   scope: Namespaced
   versions:
-    - name: v1alpha1
+    - name: v1
       served: true
       storage: true
       schema:
@@ -28,7 +28,7 @@ spec:
               properties:
                 version:
                   type: string
-                  description: "Redis version to use"
+                  description: "Redis version to deploy"
                   pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
                 replicas:
                   type: integer
@@ -41,17 +41,21 @@ spec:
                     requests:
                       type: object
                       properties:
-                        memory:
-                          type: string
                         cpu:
                           type: string
+                          pattern: "^[0-9]+m?$"
+                        memory:
+                          type: string
+                          pattern: "^[0-9]+Mi$|^[0-9]+Gi$"
                     limits:
                       type: object
                       properties:
-                        memory:
-                          type: string
                         cpu:
                           type: string
+                          pattern: "^[0-9]+m?$"
+                        memory:
+                          type: string
+                          pattern: "^[0-9]+Mi$|^[0-9]+Gi$"
             status:
               type: object
               properties:
@@ -69,24 +73,6 @@ spec:
                 readerEndpoint:
                   type: string
                   description: "Endpoint for replica Redis instances"
-                conditions:
-                  type: array
-                  items:
-                    type: object
-                    required:
-                      - type
-                      - status
-                    properties:
-                      type:
-                        type: string
-                      status:
-                        type: string
-                      lastTransitionTime:
-                        type: string
-                      reason:
-                        type: string
-                      message:
-                        type: string
                 nodes:
                   type: array
                   items:
@@ -101,17 +87,23 @@ spec:
                           - Replica
                       status:
                         type: string
+                        enum:
+                          - Ready
+                          - NotReady
                       endpoint:
                         type: string
       additionalPrinterColumns:
         - name: Version
           type: string
+          description: Redis Version
           jsonPath: .spec.version
         - name: Replicas
           type: integer
+          description: Number of Redis instances
           jsonPath: .spec.replicas
         - name: Phase
           type: string
+          description: Current Phase
           jsonPath: .status.phase
         - name: Age
           type: date

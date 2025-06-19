@@ -7,5 +7,17 @@ import lombok.Data;
 public class ManagedRedisSpec {
     private String version;
     private int replicas;
-    private ResourceRequirements resources;
+    private Resources resources;
+
+    @Data
+    public static class Resources {
+        private ResourceRequirements requests;
+        private ResourceRequirements limits;
+    }
+
+    @Data
+    public static class ResourceRequirements {
+        private String cpu;
+        private String memory;
+    }
 } 

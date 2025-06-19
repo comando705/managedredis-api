@@ -8,6 +8,7 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
         <version>2.7.9</version>
+        <relativePath/>
     </parent>
 
     <groupId>com.example</groupId>
@@ -16,11 +17,8 @@
 
     <properties>
         <java.version>11</java.version>
-        <maven.compiler.source>${java.version}</maven.compiler.source>
-        <maven.compiler.target>${java.version}</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <joperator.version>4.4.3</joperator.version>
-        <kubernetes-client.version>6.8.1</kubernetes-client.version>
+        <kubernetes.client.version>6.3.1</kubernetes.client.version>
     </properties>
 
     <dependencies>
@@ -34,23 +32,11 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Java Operator SDK -->
-        <dependency>
-            <groupId>io.javaoperatorsdk</groupId>
-            <artifactId>operator-framework</artifactId>
-            <version>${joperator.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.javaoperatorsdk</groupId>
-            <artifactId>operator-framework-spring-boot-starter</artifactId>
-            <version>${joperator.version}</version>
-        </dependency>
-
         <!-- Kubernetes Client -->
         <dependency>
             <groupId>io.fabric8</groupId>
             <artifactId>kubernetes-client</artifactId>
-            <version>${kubernetes-client.version}</version>
+            <version>${kubernetes.client.version}</version>
         </dependency>
 
         <!-- Lombok -->
