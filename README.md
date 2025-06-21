@@ -10,86 +10,9 @@ Redis 클러스터를 쉽게 관리할 수 있는 Kubernetes Operator와 REST AP
 - REST API를 통한 관리
 - 네임스페이스 기반 멀티 테넌시 지원
 
-## 실행 방법
+## 실행 준비
 
-### 로컬 개발 환경
-```bash
-# 소스 코드 클론
-git clone git@github.com:comando705/managedredis-api.git
-cd managedredis-api
-
-### Docker 환경
-
-1. Docker 이미지 준비
-```bash
-# 이미지 직접 빌드
-docker build -t managedredis-api:latest .
-
-```
-
-2. 실행 방법
-A. Docker 단독 컨테이너로 실행
-```bash
-# 기존 컨테이너 정리 (필요한 경우)
-docker rm -f managedredis-api
-
-# Docker Desktop Kubernetes 환경에서 실행
-docker run -d \
-  --name managedredis-api \
-  -p 8080:8080 \
-  -v ~/.kube/config:/root/.kube/config \
-  -e KUBERNETES_MASTER=https://kubernetes.docker.internal:6443 \
-  -e KUBERNETES_NAMESPACE=default \
-  managedredis-api:latest
-
-# 컨테이너 로그 확인
-docker logs -f managedredis-api
-
-# 컨테이너 중지 및 제거
-docker stop managedredis-api
-docker rm managedredis-api
-```
-
-주의사항:
-- Docker Compose와 단독 컨테이너 실행 중 한 가지 방법만 선택하여 사용하세요.
-- 동시에 두 방법을 사용하면 포트(8080)와 컨테이너 이름이 충돌합니다.
-- 실행 전 항상 이전 컨테이너를 정리하는 것이 좋습니다.
-
-3. 상태 확인
-```bash
-# 컨테이너 상태 확인
-docker ps -a | grep managedredis-api
-
-# API 엔드포인트 테스트
-curl http://localhost:8080/actuator/health
-
-# Swagger UI 접속
-open http://localhost:8080/swagger-ui.html
-```
-
-5. 문제 해결
-```bash
-# 컨테이너 상세 정보 확인
-docker inspect managedredis-api
-
-# 컨테이너 로그 확인
-docker logs managedredis-api
-
-# 컨테이너 내부 접속
-docker exec -it managedredis-api /bin/bash
-
-# 네트워크 연결 확인
-docker exec managedredis-api curl -v http://kubernetes.docker.internal:6443
-```
-
-주의사항:
-- Docker Desktop의 Kubernetes를 사용하는 경우 `kubernetes.docker.internal`을 사용하세요.
-- 외부 Kubernetes 클러스터를 사용하는 경우 적절한 마스터 URL을 설정하세요.
-- 보안을 위해 프로덕션 환경에서는 적절한 RBAC 설정과 시크릿 관리가 필요합니다.
-
-### Kubernetes 환경
-
-1. Kubernetes 설정
+### 1. Kubernetes 환경 준비
 ```bash
 # Docker Desktop에서 Kubernetes 활성화
 1. Docker Desktop 실행
@@ -104,41 +27,100 @@ kubectl cluster-info
 kubectl get nodes
 ```
 
-2. 애플리케이션 배포
+### 2. CRD 및 권한 설정
 ```bash
 # CRD 설치
 kubectl apply -f k8s/managedredis-crd.yaml
 
-# 애플리케이션 배포
-kubectl apply -f k8s/deployment.yaml
+# RBAC 권한 설정
+kubectl create clusterrolebinding managedredis-admin \
+  --clusterrole=cluster-admin \
+  --serviceaccount=default:default
+
+# ServiceAccount 토큰 시크릿 생성
+kubectl create token default
+
+# 설정 확인
+kubectl get crd managedredis.redis.managed.com
+kubectl auth can-i get managedredis.redis.managed.com
 ```
 
-### Docker Desktop Kubernetes를 선택한 이유
+## 실행 방법
 
-1. **간편한 설정**
-   - 별도의 도구 설치가 필요 없음 (minikube나 kind 불필요)
-   - Docker Desktop UI를 통한 쉬운 활성화/비활성화
-   - 자동 업데이트 지원
+### Docker 실행 단계
 
-2. **리소스 효율성**
-   - Docker와 Kubernetes가 동일한 가상화 환경 공유
-   - 시스템 리소스 사용량 최적화
-   - 추가적인 VM 오버헤드 없음
+1. 소스 코드 준비
+```bash
+git clone git@github.com:comando705/managedredis-api.git
+cd managedredis-api
+```
 
-3. **개발 환경 일관성**
-   - Docker와 Kubernetes 버전 호환성 보장
-   - 동일한 컨텍스트에서 Docker와 Kubernetes 명령어 사용
-   - 로컬/프로덕션 환경 간 일관성 유지
+2. Docker 이미지 빌드
+```bash
+docker build -t managedredis-api:latest .
+```
 
-4. **통합 도구 지원**
-   - Docker Desktop Dashboard를 통한 컨테이너/파드 모니터링
-   - 내장된 로그 뷰어 및 쉘 액세스
-   - 리소스 사용량 모니터링
+3. 기존 컨테이너 정리 (필요한 경우)
+```bash
+docker rm -f managedredis-api
+```
 
-5. **네트워크 접근성**
-   - localhost를 통한 직접 서비스 접근
-   - 복잡한 포트 포워딩 설정 불필요
-   - 호스트 시스템과의 원활한 네트워크 통합
+4. 컨테이너 실행
+```bash
+docker run -d \
+  --name managedredis-api \
+  -p 8080:8080 \
+  -v ~/.kube/config:/root/.kube/config \
+  -e KUBERNETES_MASTER=https://kubernetes.docker.internal:6443 \
+  -e KUBERNETES_NAMESPACE=default \
+  managedredis-api:latest
+```
+
+5. 실행 확인
+```bash
+# 컨테이너 상태 확인
+docker ps -a | grep managedredis-api
+
+# 로그 확인
+docker logs -f managedredis-api
+
+# API 상태 확인
+curl http://localhost:8080/actuator/health
+
+# Swagger UI 접속
+open http://localhost:8080/swagger-ui.html
+```
+
+## 문제 해결
+
+### 1. 컨테이너 관련 문제
+```bash
+# 컨테이너 상태 확인
+docker ps -a | grep managedredis-api
+
+# 상세 로그 확인
+docker logs -f managedredis-api
+
+# 컨테이너 내부 접속
+docker exec -it managedredis-api /bin/bash
+```
+
+### 2. Kubernetes 연결 문제
+```bash
+# Kubernetes 연결 상태 확인
+kubectl cluster-info
+kubectl get nodes
+
+# CRD 상태 확인
+kubectl get crd | grep managedredis
+```
+
+### 3. 권한 문제
+```bash
+# RBAC 권한 확인
+kubectl auth can-i get managedredis.redis.managed.com
+kubectl auth can-i create managedredis.redis.managed.com
+```
 
 ## 테스트 방법
 
@@ -230,22 +212,6 @@ docker rm managedredis-api-test
 
 # 이미지 삭제 (선택사항)
 docker rmi managedredis-api-test:latest
-```
-
-### 로컬 개발 환경에서 테스트 실행 (선택사항)
-
-Maven이 로컬에 설치된 경우에만 사용:
-
-```bash
-# Maven 설치 (필요한 경우)
-# macOS
-brew install maven
-
-# Ubuntu
-sudo apt-get install maven
-
-# 테스트 실행
-mvn test
 ```
 
 ### 수동 테스트

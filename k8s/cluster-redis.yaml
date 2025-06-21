@@ -1,10 +1,10 @@
 apiVersion: redis.managed.com/v1
 kind: ManagedRedis
 metadata:
-  name: sample-redis
+  name: cluster-redis
 spec:
   version: "7.0.0"
-  replicas: 2
+  replicas: 3
   resources:
     requests:
       memory: "128Mi"

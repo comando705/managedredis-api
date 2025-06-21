@@ -1,10 +1,10 @@
 apiVersion: redis.managed.com/v1
 kind: ManagedRedis
 metadata:
-  name: whchoi-redis
+  name: single-redis
 spec:
   version: "7.0.0"
-  replicas: 2
+  replicas: 1
   resources:
     requests:
       memory: "128Mi"
