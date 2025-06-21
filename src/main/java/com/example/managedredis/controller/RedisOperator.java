@@ -81,6 +81,7 @@ public class RedisOperator {
         log.info("Creating Redis cluster: {}/{}", namespace, name);
 
         try {
+            // Initial status update
             updateStatus(redis, "Creating");
 
             // Create StatefulSet
@@ -89,14 +90,14 @@ public class RedisOperator {
             // Create Services
             createRedisServices(redis);
 
-            // Update status
+            // Final status update
             updateStatus(redis, "Running");
         } catch (Exception e) {
-            log.error("Failed to create Redis cluster", e);
+            log.error("Failed to create Redis cluster: {}/{}", namespace, name, e);
             try {
                 updateStatus(redis, "Failed");
             } catch (Exception statusError) {
-                log.error("Failed to update status", statusError);
+                log.error("Failed to update status for {}/{}", namespace, name, statusError);
             }
         }
     }
@@ -118,11 +119,11 @@ public class RedisOperator {
                         .withName("redis")
                         .build())
                 .withCommand("/bin/sh", "-c")
-                .withArgs("if [ ${HOSTNAME} = '" + name + "-0' ]; then\n" +
-                        "    redis-server --port " + RedisConfig.REDIS_PORT + "\n" +
-                        "else\n" +
-                        "    redis-server --port " + RedisConfig.REDIS_PORT + 
-                        " --slaveof " + name + "-0." + name + " " + RedisConfig.REDIS_PORT + "\n" +
+                .withArgs("if [ \"${HOSTNAME##*-}\" != \"0\" ]; then " +
+                        "redis-server --port " + RedisConfig.REDIS_PORT + 
+                        " --slaveof " + name + "-0." + name + " " + RedisConfig.REDIS_PORT + "; " +
+                        "else " +
+                        "redis-server --port " + RedisConfig.REDIS_PORT + "; " +
                         "fi")
                 .withResources(new ResourceRequirementsBuilder()
                         .withRequests(Map.of(
@@ -215,10 +216,6 @@ public class RedisOperator {
                 .createOrReplace();
 
         // Primary Service (for the first pod)
-        Map<String, String> primarySelector = new HashMap<>();
-        primarySelector.put(RedisConfig.APP_LABEL, name);
-        primarySelector.put("statefulset.kubernetes.io/pod-name", name + "-0");
-
         Service primaryService = new ServiceBuilder()
                 .withNewMetadata()
                     .withName(name + "-primary")
@@ -226,7 +223,10 @@ public class RedisOperator {
                     .withOwnerReferences(createOwnerReference(redis))
                 .endMetadata()
                 .withNewSpec()
-                    .withSelector(primarySelector)
+                    .withSelector(Map.of(
+                        RedisConfig.APP_LABEL, name,
+                        "statefulset.kubernetes.io/pod-name", name + "-0"
+                    ))
                     .withPorts(new ServicePortBuilder()
                             .withPort(Integer.parseInt(RedisConfig.REDIS_PORT))
                             .withName("redis")
@@ -241,11 +241,6 @@ public class RedisOperator {
 
         // Reader Service (for replicas)
         if (redis.getSpec().getReplicas() > 1) {
-            Map<String, String> replicaSelector = new HashMap<>();
-            replicaSelector.put(RedisConfig.APP_LABEL, name);
-            replicaSelector.put("statefulset.kubernetes.io/pod-name-prefix", name + "-");
-            replicaSelector.put("statefulset.kubernetes.io/pod-name-not", name + "-0");
-
             Service readerService = new ServiceBuilder()
                     .withNewMetadata()
                         .withName(name + "-reader")
@@ -253,7 +248,9 @@ public class RedisOperator {
                         .withOwnerReferences(createOwnerReference(redis))
                     .endMetadata()
                     .withNewSpec()
-                        .withSelector(replicaSelector)
+                        .withSelector(Map.of(
+                            RedisConfig.APP_LABEL, name
+                        ))
                         .withPorts(new ServicePortBuilder()
                                 .withPort(Integer.parseInt(RedisConfig.REDIS_PORT))
                                 .withName("redis")
@@ -273,6 +270,23 @@ public class RedisOperator {
         String name = redis.getMetadata().getName();
 
         try {
+            // Get the latest version of the resource
+            ManagedRedis latestRedis = kubernetesClient.resources(ManagedRedis.class)
+                    .inNamespace(namespace)
+                    .withName(name)
+                    .get();
+
+            if (latestRedis == null) {
+                log.warn("ManagedRedis {}/{} not found", namespace, name);
+                return;
+            }
+
+            // Check if status is already up to date
+            if (phase.equals(latestRedis.getStatus().getPhase())) {
+                log.debug("Status already up to date for {}/{}: {}", namespace, name, phase);
+                return;
+            }
+
             // Check StatefulSet status
             StatefulSet statefulSet = kubernetesClient.apps().statefulSets()
                     .inNamespace(namespace)
@@ -296,14 +310,14 @@ public class RedisOperator {
             }
 
             // Update phase
-            redis.getStatus().setPhase(phase);
+            latestRedis.getStatus().setPhase(phase);
 
             // Update endpoints
-            redis.getStatus().setPrimaryEndpoint(
+            latestRedis.getStatus().setPrimaryEndpoint(
                     String.format("%s-primary.%s.svc:%s", name, namespace, RedisConfig.REDIS_PORT));
             
             if (redis.getSpec().getReplicas() > 1) {
-                redis.getStatus().setReaderEndpoint(
+                latestRedis.getStatus().setReaderEndpoint(
                         String.format("%s-reader.%s.svc:%s", name, namespace, RedisConfig.REDIS_PORT));
             }
 
@@ -346,15 +360,44 @@ public class RedisOperator {
                 }
             }
 
-            redis.getStatus().setNodes(nodes);
+            latestRedis.getStatus().setNodes(nodes);
 
-            // Update status
-            kubernetesClient.resources(ManagedRedis.class)
-                    .inNamespace(namespace)
-                    .withName(name)
-                    .updateStatus(redis);
+            // Update status with retries
+            int maxRetries = 3;
+            int retryCount = 0;
+            while (retryCount < maxRetries) {
+                try {
+                    // Get the latest resource version before update
+                    ManagedRedis currentRedis = kubernetesClient.resources(ManagedRedis.class)
+                            .inNamespace(namespace)
+                            .withName(name)
+                            .get();
+                    
+                    if (currentRedis == null) {
+                        log.warn("ManagedRedis {}/{} not found during update", namespace, name);
+                        return;
+                    }
+
+                    // Copy the status to the latest version
+                    currentRedis.setStatus(latestRedis.getStatus());
+                    
+                    kubernetesClient.resources(ManagedRedis.class)
+                            .inNamespace(namespace)
+                            .withName(name)
+                            .updateStatus(currentRedis);
+                    log.info("Successfully updated status for {}/{} to {}", namespace, name, phase);
+                    break;
+                } catch (Exception e) {
+                    if (retryCount == maxRetries - 1) {
+                        throw e;
+                    }
+                    retryCount++;
+                    log.warn("Failed to update status, retrying ({}/{})", retryCount, maxRetries);
+                    Thread.sleep(1000L * retryCount); // Exponential backoff
+                }
+            }
         } catch (Exception e) {
-            log.error("Failed to update status", e);
+            log.error("Failed to update status for {}/{}", namespace, name, e);
         }
     }
 
