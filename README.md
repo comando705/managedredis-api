@@ -10,26 +10,173 @@ Redis 클러스터를 쉽게 관리할 수 있는 Kubernetes Operator와 REST AP
 - REST API를 통한 관리
 - 네임스페이스 기반 멀티 테넌시 지원
 
-## 시작하기
+## 실행 방법
 
-### 사전 요구사항
+### 로컬 개발 환경
 
-- Kubernetes 클러스터
-- Java 11 이상
-- Maven
-- Docker
+1. 소스 코드 클론
+```bash
+git clone [repository-url]
+cd managedredis-api
+```
 
-### 설치
+2. 로컬 Kubernetes 클러스터 준비
+```bash
+# minikube 사용 시
+minikube start
 
-1. CRD 설치
+# kind 사용 시
+kind create cluster
+```
+
+3. CRD 설치
 ```bash
 kubectl apply -f k8s/managedredis-crd.yaml
 ```
 
-2. 애플리케이션 빌드 및 실행
+4. 애플리케이션 실행
 ```bash
+# Maven으로 직접 실행
+mvn spring-boot:run
+
+# 또는 JAR 파일로 실행
 mvn clean package
-docker-compose up --build
+java -jar target/managedredis-api.jar
+```
+
+### Docker 환경
+
+1. Docker 이미지 빌드
+```bash
+docker build -t managedredis-api:latest .
+```
+
+2. Docker 컨테이너 실행
+```bash
+docker run -p 8080:8080 \
+  -e KUBERNETES_MASTER=https://kubernetes.default.svc \
+  -e KUBERNETES_NAMESPACE=default \
+  managedredis-api:latest
+```
+
+### Kubernetes 환경
+
+1. Kubernetes 클러스터에 배포
+```bash
+# CRD 설치
+kubectl apply -f k8s/managedredis-crd.yaml
+
+# 애플리케이션 배포
+kubectl apply -f k8s/deployment.yaml
+```
+
+## 테스트 방법
+
+### 단위 테스트 실행
+
+```bash
+# 전체 테스트 실행
+mvn test
+
+# 특정 테스트 클래스 실행
+mvn test -Dtest=RedisOperatorTest
+
+# 테스트 커버리지 리포트 생성
+mvn verify
+```
+
+### 통합 테스트
+
+1. Redis 클러스터 생성 테스트
+```bash
+# 단일 노드 Redis 생성
+curl -X POST http://localhost:8080/api/v1/managedredis \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "test-redis",
+    "namespace": "default",
+    "spec": {
+      "version": "6.2.0",
+      "replicas": 1
+    }
+  }'
+
+# 상태 확인
+curl http://localhost:8080/api/v1/managedredis/test-redis
+```
+
+2. Primary-Replica 구성 테스트
+```bash
+# Primary-Replica Redis 생성
+curl -X POST http://localhost:8080/api/v1/managedredis \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "test-redis-cluster",
+    "namespace": "default",
+    "spec": {
+      "version": "6.2.0",
+      "replicas": 3
+    }
+  }'
+
+# 복제 상태 확인
+curl http://localhost:8080/api/v1/managedredis/test-redis-cluster
+```
+
+3. 부하 테스트
+```bash
+# Redis 클러스터에 부하 생성
+redis-benchmark -h <redis-host> -p <redis-port> -n 100000 -c 50
+```
+
+### 상태 확인
+
+1. Pod 상태 확인
+```bash
+kubectl get pods -l app=managedredis
+```
+
+2. 로그 확인
+```bash
+# 애플리케이션 로그
+kubectl logs -l app=managedredis-api
+
+# Redis 로그
+kubectl logs -l app=managedredis-instance
+```
+
+3. Redis 연결 테스트
+```bash
+# Redis CLI 접속
+kubectl exec -it <redis-pod-name> -- redis-cli
+
+# 기본 명령어 테스트
+> PING
+PONG
+> SET key value
+OK
+> GET key
+"value"
+```
+
+### 문제 해결 테스트
+
+1. 장애 복구 테스트
+```bash
+# Redis Pod 강제 종료
+kubectl delete pod <redis-pod-name>
+
+# 자동 복구 확인
+kubectl get pods -w
+```
+
+2. 네트워크 격리 테스트
+```bash
+# 네트워크 정책 적용
+kubectl apply -f k8s/network-policy.yaml
+
+# 연결 테스트
+kubectl exec -it <test-pod> -- curl http://managedredis-api:8080
 ```
 
 ## API 문서

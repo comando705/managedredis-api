@@ -12,8 +12,8 @@ public class RedisConfig {
     public static final String MANAGED_BY_LABEL = "managed-by";
     public static final String REDIS_PORT = "6379";
     
-    public static final String PRIMARY_ROLE = "primary";
-    public static final String REPLICA_ROLE = "replica";
+    public static final String PRIMARY_ROLE = "Primary";
+    public static final String REPLICA_ROLE = "Replica";
     public static final String MANAGED_BY = "managedredis-operator";
 
     // Health check configuration

@@ -4,6 +4,7 @@ import com.example.managedredis.config.RedisConfig;
 import com.example.managedredis.model.ManagedRedis;
 import com.example.managedredis.model.ManagedRedisStatus;
 import io.fabric8.kubernetes.api.model.*;
+import io.fabric8.kubernetes.api.model.apps.*;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.informers.ResourceEventHandler;
 import io.fabric8.kubernetes.client.informers.SharedIndexInformer;
@@ -80,13 +81,10 @@ public class RedisOperator {
         log.info("Creating Redis cluster: {}/{}", namespace, name);
 
         try {
-            // Create Primary Pod
-            createRedisPod(redis, 0, true);
+            updateStatus(redis, "Creating");
 
-            // Create Replica Pods
-            for (int i = 1; i < redis.getSpec().getReplicas(); i++) {
-                createRedisPod(redis, i, false);
-            }
+            // Create StatefulSet
+            createRedisStatefulSet(redis);
 
             // Create Services
             createRedisServices(redis);
@@ -103,17 +101,15 @@ public class RedisOperator {
         }
     }
 
-    private void createRedisPod(ManagedRedis redis, int index, boolean isPrimary) {
+    private void createRedisStatefulSet(ManagedRedis redis) {
         String namespace = redis.getMetadata().getNamespace();
         String name = redis.getMetadata().getName();
-        String podName = String.format("%s-%d", name, index);
-        String role = isPrimary ? RedisConfig.PRIMARY_ROLE : RedisConfig.REPLICA_ROLE;
 
         Map<String, String> labels = new HashMap<>();
         labels.put(RedisConfig.APP_LABEL, name);
-        labels.put(RedisConfig.ROLE_LABEL, role);
         labels.put(RedisConfig.MANAGED_BY_LABEL, RedisConfig.MANAGED_BY);
 
+        // Create container template
         Container container = new ContainerBuilder()
                 .withName("redis")
                 .withImage(String.format(RedisConfig.REDIS_IMAGE, redis.getSpec().getVersion()))
@@ -122,38 +118,106 @@ public class RedisOperator {
                         .withName("redis")
                         .build())
                 .withCommand("/bin/sh", "-c")
-                .withArgs(isPrimary ? 
-                        "redis-server --port " + RedisConfig.REDIS_PORT :
-                        String.format("redis-server --port %s --slaveof %s-primary %s", 
-                                RedisConfig.REDIS_PORT, name, RedisConfig.REDIS_PORT))
+                .withArgs("if [ ${HOSTNAME} = '" + name + "-0' ]; then\n" +
+                        "    redis-server --port " + RedisConfig.REDIS_PORT + "\n" +
+                        "else\n" +
+                        "    redis-server --port " + RedisConfig.REDIS_PORT + 
+                        " --slaveof " + name + "-0." + name + " " + RedisConfig.REDIS_PORT + "\n" +
+                        "fi")
+                .withResources(new ResourceRequirementsBuilder()
+                        .withRequests(Map.of(
+                            "cpu", new Quantity(redis.getSpec().getResources().getRequests().getCpu()),
+                            "memory", new Quantity(redis.getSpec().getResources().getRequests().getMemory())
+                        ))
+                        .withLimits(Map.of(
+                            "cpu", new Quantity(redis.getSpec().getResources().getLimits().getCpu()),
+                            "memory", new Quantity(redis.getSpec().getResources().getLimits().getMemory())
+                        ))
+                        .build())
+                .withLivenessProbe(new ProbeBuilder()
+                        .withNewExec()
+                            .withCommand("redis-cli", "ping")
+                        .endExec()
+                        .withInitialDelaySeconds(30)
+                        .withPeriodSeconds(10)
+                        .build())
+                .withReadinessProbe(new ProbeBuilder()
+                        .withNewExec()
+                            .withCommand("redis-cli", "ping")
+                        .endExec()
+                        .withInitialDelaySeconds(5)
+                        .withPeriodSeconds(5)
+                        .build())
                 .build();
 
-        Pod pod = new PodBuilder()
+        // Create StatefulSet
+        StatefulSet statefulSet = new StatefulSetBuilder()
                 .withNewMetadata()
-                    .withName(podName)
+                    .withName(name)
                     .withNamespace(namespace)
                     .withLabels(labels)
                     .withOwnerReferences(createOwnerReference(redis))
                 .endMetadata()
                 .withNewSpec()
-                    .withContainers(container)
+                    .withReplicas(redis.getSpec().getReplicas())
+                    .withServiceName(name)
+                    .withNewSelector()
+                        .withMatchLabels(labels)
+                    .endSelector()
+                    .withNewTemplate()
+                        .withNewMetadata()
+                            .withLabels(labels)
+                        .endMetadata()
+                        .withNewSpec()
+                            .withContainers(container)
+                        .endSpec()
+                    .endTemplate()
                 .endSpec()
                 .build();
 
-        kubernetesClient.pods()
+        // Create or update StatefulSet
+        kubernetesClient.apps().statefulSets()
                 .inNamespace(namespace)
-                .resource(pod)
-                .create();
+                .resource(statefulSet)
+                .createOrReplace();
+
+        // Wait for StatefulSet to be ready
+        kubernetesClient.apps().statefulSets()
+                .inNamespace(namespace)
+                .withName(name)
+                .waitUntilReady(5, TimeUnit.MINUTES);
     }
 
     private void createRedisServices(ManagedRedis redis) {
         String namespace = redis.getMetadata().getNamespace();
         String name = redis.getMetadata().getName();
 
-        // Primary Service
+        // Headless service for StatefulSet
+        Service headlessService = new ServiceBuilder()
+                .withNewMetadata()
+                    .withName(name)
+                    .withNamespace(namespace)
+                    .withOwnerReferences(createOwnerReference(redis))
+                .endMetadata()
+                .withNewSpec()
+                    .withClusterIP("None")
+                    .withSelector(Map.of(RedisConfig.APP_LABEL, name))
+                    .withPorts(new ServicePortBuilder()
+                            .withPort(Integer.parseInt(RedisConfig.REDIS_PORT))
+                            .withName("redis")
+                            .build())
+                .endSpec()
+                .build();
+
+        kubernetesClient.services()
+                .inNamespace(namespace)
+                .resource(headlessService)
+                .createOrReplace();
+
+        // Primary Service (for the first pod)
         Map<String, String> primarySelector = new HashMap<>();
         primarySelector.put(RedisConfig.APP_LABEL, name);
-        primarySelector.put(RedisConfig.ROLE_LABEL, RedisConfig.PRIMARY_ROLE);
+        primarySelector.put("statefulset.kubernetes.io/pod-name", name + "-0");
 
         Service primaryService = new ServiceBuilder()
                 .withNewMetadata()
@@ -173,13 +237,14 @@ public class RedisOperator {
         kubernetesClient.services()
                 .inNamespace(namespace)
                 .resource(primaryService)
-                .create();
+                .createOrReplace();
 
         // Reader Service (for replicas)
         if (redis.getSpec().getReplicas() > 1) {
             Map<String, String> replicaSelector = new HashMap<>();
             replicaSelector.put(RedisConfig.APP_LABEL, name);
-            replicaSelector.put(RedisConfig.ROLE_LABEL, RedisConfig.REPLICA_ROLE);
+            replicaSelector.put("statefulset.kubernetes.io/pod-name-prefix", name + "-");
+            replicaSelector.put("statefulset.kubernetes.io/pod-name-not", name + "-0");
 
             Service readerService = new ServiceBuilder()
                     .withNewMetadata()
@@ -199,7 +264,7 @@ public class RedisOperator {
             kubernetesClient.services()
                     .inNamespace(namespace)
                     .resource(readerService)
-                    .create();
+                    .createOrReplace();
         }
     }
 
@@ -207,68 +272,83 @@ public class RedisOperator {
         String namespace = redis.getMetadata().getNamespace();
         String name = redis.getMetadata().getName();
 
-        // Update phase
-        redis.getStatus().setPhase(phase);
-
-        // Update endpoints
-        redis.getStatus().setPrimaryEndpoint(
-                String.format("%s-primary.%s.svc:%s", name, namespace, RedisConfig.REDIS_PORT));
-        
-        if (redis.getSpec().getReplicas() > 1) {
-            redis.getStatus().setReaderEndpoint(
-                    String.format("%s-reader.%s.svc:%s", name, namespace, RedisConfig.REDIS_PORT));
-        }
-
-        // Update node status
-        List<ManagedRedisStatus.Node> nodes = new ArrayList<>();
-        
-        // Check primary node
-        String primaryPodName = name + "-0";
-        Pod primaryPod = kubernetesClient.pods()
-                .inNamespace(namespace)
-                .withName(primaryPodName)
-                .get();
-        
-        if (primaryPod != null) {
-            ManagedRedisStatus.Node primaryNode = new ManagedRedisStatus.Node();
-            primaryNode.setName(primaryPodName);
-            primaryNode.setRole(RedisConfig.PRIMARY_ROLE);
-            primaryNode.setStatus(isPodReady(primaryPod) ? "Ready" : "NotReady");
-            primaryNode.setEndpoint(String.format("%s.%s.pod:%s", 
-                    primaryPodName, namespace, RedisConfig.REDIS_PORT));
-            nodes.add(primaryNode);
-        }
-
-        // Check replica nodes
-        for (int i = 1; i < redis.getSpec().getReplicas(); i++) {
-            String replicaPodName = name + "-" + i;
-            Pod replicaPod = kubernetesClient.pods()
+        try {
+            // Check StatefulSet status
+            StatefulSet statefulSet = kubernetesClient.apps().statefulSets()
                     .inNamespace(namespace)
-                    .withName(replicaPodName)
+                    .withName(name)
+                    .get();
+
+            if (statefulSet != null) {
+                StatefulSetStatus status = statefulSet.getStatus();
+                if (status != null) {
+                    Integer replicas = status.getReplicas();
+                    Integer readyReplicas = status.getReadyReplicas();
+                    
+                    if (replicas != null && readyReplicas != null) {
+                        if (readyReplicas.equals(replicas)) {
+                            phase = "Running";
+                        } else if ("Running".equals(phase)) {
+                            phase = "Creating";
+                        }
+                    }
+                }
+            }
+
+            // Update phase
+            redis.getStatus().setPhase(phase);
+
+            // Update endpoints
+            redis.getStatus().setPrimaryEndpoint(
+                    String.format("%s-primary.%s.svc:%s", name, namespace, RedisConfig.REDIS_PORT));
+            
+            if (redis.getSpec().getReplicas() > 1) {
+                redis.getStatus().setReaderEndpoint(
+                        String.format("%s-reader.%s.svc:%s", name, namespace, RedisConfig.REDIS_PORT));
+            }
+
+            // Update node status
+            List<ManagedRedisStatus.Node> nodes = new ArrayList<>();
+            
+            // Check primary node
+            String primaryPodName = name + "-0";
+            Pod primaryPod = kubernetesClient.pods()
+                    .inNamespace(namespace)
+                    .withName(primaryPodName)
                     .get();
             
-            if (replicaPod != null) {
-                ManagedRedisStatus.Node replicaNode = new ManagedRedisStatus.Node();
-                replicaNode.setName(replicaPodName);
-                replicaNode.setRole(RedisConfig.REPLICA_ROLE);
-                replicaNode.setStatus(isPodReady(replicaPod) ? "Ready" : "NotReady");
-                replicaNode.setEndpoint(String.format("%s.%s.pod:%s", 
-                        replicaPodName, namespace, RedisConfig.REDIS_PORT));
-                nodes.add(replicaNode);
+            if (primaryPod != null) {
+                ManagedRedisStatus.Node primaryNode = new ManagedRedisStatus.Node();
+                primaryNode.setName(primaryPodName);
+                primaryNode.setRole(RedisConfig.PRIMARY_ROLE);
+                primaryNode.setStatus(isPodReady(primaryPod) ? "Ready" : "NotReady");
+                primaryNode.setEndpoint(String.format("%s.%s.pod:%s", 
+                        primaryPodName, namespace, RedisConfig.REDIS_PORT));
+                nodes.add(primaryNode);
             }
-        }
 
-        redis.getStatus().setNodes(nodes);
-
-        // Update overall phase based on node status
-        if ("Creating".equals(phase)) {
-            if (nodes.size() == redis.getSpec().getReplicas() && 
-                nodes.stream().allMatch(node -> "Ready".equals(node.getStatus()))) {
-                redis.getStatus().setPhase("Running");
+            // Check replica nodes
+            for (int i = 1; i < redis.getSpec().getReplicas(); i++) {
+                String replicaPodName = name + "-" + i;
+                Pod replicaPod = kubernetesClient.pods()
+                        .inNamespace(namespace)
+                        .withName(replicaPodName)
+                        .get();
+                
+                if (replicaPod != null) {
+                    ManagedRedisStatus.Node replicaNode = new ManagedRedisStatus.Node();
+                    replicaNode.setName(replicaPodName);
+                    replicaNode.setRole(RedisConfig.REPLICA_ROLE);
+                    replicaNode.setStatus(isPodReady(replicaPod) ? "Ready" : "NotReady");
+                    replicaNode.setEndpoint(String.format("%s.%s.pod:%s", 
+                            replicaPodName, namespace, RedisConfig.REDIS_PORT));
+                    nodes.add(replicaNode);
+                }
             }
-        }
 
-        try {
+            redis.getStatus().setNodes(nodes);
+
+            // Update status
             kubernetesClient.resources(ManagedRedis.class)
                     .inNamespace(namespace)
                     .withName(name)
@@ -354,8 +434,41 @@ public class RedisOperator {
     }
 
     private void updateRedisCluster(ManagedRedis oldRedis, ManagedRedis newRedis) {
-        // 구현 예정: 스케일링, 버전 업그레이드 등
-        log.info("Update not implemented yet");
+        String namespace = newRedis.getMetadata().getNamespace();
+        String name = newRedis.getMetadata().getName();
+        log.info("Updating Redis cluster: {}/{}", namespace, name);
+
+        try {
+            // Update StatefulSet replicas
+            StatefulSet statefulSet = kubernetesClient.apps().statefulSets()
+                    .inNamespace(namespace)
+                    .withName(name)
+                    .get();
+
+            if (statefulSet != null) {
+                statefulSet.getSpec().setReplicas(newRedis.getSpec().getReplicas());
+                kubernetesClient.apps().statefulSets()
+                        .inNamespace(namespace)
+                        .resource(statefulSet)
+                        .createOrReplace();
+
+                // Create or delete reader service based on replica count
+                if (newRedis.getSpec().getReplicas() > 1) {
+                    createRedisServices(newRedis);
+                } else {
+                    kubernetesClient.services()
+                            .inNamespace(namespace)
+                            .withName(name + "-reader")
+                            .delete();
+                }
+            }
+
+            // Update status
+            updateStatus(newRedis, "Running");
+        } catch (Exception e) {
+            log.error("Failed to update Redis cluster", e);
+            updateStatus(newRedis, "Failed");
+        }
     }
 
     private void deleteRedisCluster(ManagedRedis redis) {
