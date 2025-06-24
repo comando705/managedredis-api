@@ -7,21 +7,43 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.Optional;
 
+public interface ManagedRedisService {
+    ManagedRedis createManagedRedis(ManagedRedis managedRedis);
+    ManagedRedis getManagedRedis(String name);
+    void deleteManagedRedis(String name);
+}
+
 @Service
-public class ManagedRedisService {
+class ManagedRedisServiceImpl implements ManagedRedisService {
 
     private final KubernetesClient kubernetesClient;
     private static final String DEFAULT_NAMESPACE = "default";
 
-    public ManagedRedisService(KubernetesClient kubernetesClient) {
+    public ManagedRedisServiceImpl(KubernetesClient kubernetesClient) {
         this.kubernetesClient = kubernetesClient;
     }
 
-    public ManagedRedis create(String namespace, ManagedRedis managedRedis) {
-        String ns = Optional.ofNullable(namespace).orElse(DEFAULT_NAMESPACE);
+    @Override
+    public ManagedRedis createManagedRedis(ManagedRedis managedRedis) {
         return kubernetesClient.resources(ManagedRedis.class)
-                .inNamespace(ns)
+                .inNamespace(DEFAULT_NAMESPACE)
                 .create(managedRedis);
+    }
+
+    @Override
+    public ManagedRedis getManagedRedis(String name) {
+        return kubernetesClient.resources(ManagedRedis.class)
+                .inNamespace(DEFAULT_NAMESPACE)
+                .withName(name)
+                .get();
+    }
+
+    @Override
+    public void deleteManagedRedis(String name) {
+        kubernetesClient.resources(ManagedRedis.class)
+                .inNamespace(DEFAULT_NAMESPACE)
+                .withName(name)
+                .delete();
     }
 
     public List<ManagedRedis> list(String namespace) {
@@ -30,21 +52,5 @@ public class ManagedRedisService {
                 .inNamespace(ns)
                 .list()
                 .getItems();
-    }
-
-    public ManagedRedis get(String namespace, String name) {
-        String ns = Optional.ofNullable(namespace).orElse(DEFAULT_NAMESPACE);
-        return kubernetesClient.resources(ManagedRedis.class)
-                .inNamespace(ns)
-                .withName(name)
-                .get();
-    }
-
-    public void delete(String namespace, String name) {
-        String ns = Optional.ofNullable(namespace).orElse(DEFAULT_NAMESPACE);
-        kubernetesClient.resources(ManagedRedis.class)
-                .inNamespace(ns)
-                .withName(name)
-                .delete();
     }
 } 
